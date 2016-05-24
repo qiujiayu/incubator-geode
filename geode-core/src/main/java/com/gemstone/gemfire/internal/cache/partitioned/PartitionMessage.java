@@ -58,6 +58,7 @@ import com.gemstone.gemfire.internal.cache.GemFireCacheImpl;
 import com.gemstone.gemfire.internal.cache.PartitionedRegion;
 import com.gemstone.gemfire.internal.cache.PartitionedRegionException;
 import com.gemstone.gemfire.internal.cache.PrimaryBucketException;
+import com.gemstone.gemfire.internal.cache.TXId;
 import com.gemstone.gemfire.internal.cache.TXManagerImpl;
 import com.gemstone.gemfire.internal.cache.TXStateProxy;
 import com.gemstone.gemfire.internal.cache.TransactionMessage;
@@ -262,8 +263,8 @@ public abstract class PartitionMessage extends DistributionMessage implements
   /**
    * check to see if the cache is closing
    */
-  final public boolean checkCacheClosing(DistributionManager dm) {
-    GemFireCacheImpl cache = GemFireCacheImpl.getInstance();
+  public boolean checkCacheClosing(DistributionManager dm) {
+    GemFireCacheImpl cache = getGemFireCacheImpl();
     // return (cache != null && cache.isClosed());
     return cache == null || cache.isClosed();
   }
@@ -272,9 +273,52 @@ public abstract class PartitionMessage extends DistributionMessage implements
    * check to see if the distributed system is closing
    * @return true if the distributed system is closing
    */
-  final public boolean checkDSClosing(DistributionManager dm) {
+  public boolean checkDSClosing(DistributionManager dm) {
     InternalDistributedSystem ds = dm.getSystem();
     return (ds == null || ds.isDisconnecting());
+  }
+  
+  boolean hasTxAlreadyFinished(TXStateProxy tx, TXManagerImpl txMgr) {
+    if (tx == null) {
+      return false;
+    } else {
+      TXId txid = new TXId(getMemberToMasqueradeAs(), getTXUniqId());
+      if (hasTXRecentlyCompleted(txid, txMgr)) {
+        //Should only happen when handling a later arrival of transactional op from proxy,
+        //while the transaction has failed over and already committed or rolled back.
+        //Just send back reply as a success op.
+        //The client connection should be lost from proxy, or
+        //the proxy is closed for failover to occur.
+        logger.info("TxId {} has already finished." , txid);
+        return true;
+      } else {
+        return false;
+      }
+    }
+  }
+  
+  PartitionedRegion getPartitionedRegion() throws PRLocallyDestroyedException {
+    return PartitionedRegion.getPRFromId(this.regionId);
+  }
+  
+  GemFireCacheImpl getGemFireCacheImpl() {
+    return GemFireCacheImpl.getInstance();
+  }
+
+  TXManagerImpl getTXManagerImpl(GemFireCacheImpl cache) {
+    return cache.getTxManager();
+  }
+  
+  long getStartPartitionMessageProcessingTime(PartitionedRegion pr) {
+    return pr.getPrStats().startPartitionMessageProcessing();
+  }
+  
+  TXStateProxy masqueradeAs(TransactionMessage msg, TXManagerImpl txMgr) throws InterruptedException {
+    return txMgr.masqueradeAs(msg);
+  }
+  
+  boolean hasTXRecentlyCompleted(TXId txid, TXManagerImpl txMgr) {
+    return txMgr.isHostedTxRecentlyCompleted(txid);
   }
   
   /**
@@ -298,7 +342,7 @@ public abstract class PartitionMessage extends DistributionMessage implements
         thr = new CacheClosedException(LocalizedStrings.PartitionMessage_REMOTE_CACHE_IS_CLOSED_0.toLocalizedString(dm.getId()));
         return;
       }
-      pr = PartitionedRegion.getPRFromId(this.regionId);
+      pr = getPartitionedRegion();
       if (pr == null && failIfRegionMissing()) {
         // if the distributed system is disconnecting, don't send a reply saying
         // the partitioned region can't be found (bug 36585)
@@ -307,19 +351,21 @@ public abstract class PartitionMessage extends DistributionMessage implements
       }
 
       if (pr != null) {
-        startTime = pr.getPrStats().startPartitionMessageProcessing();
+        startTime = getStartPartitionMessageProcessingTime(pr);
       }
       thr = UNHANDLED_EXCEPTION;
       
-      GemFireCacheImpl cache = GemFireCacheImpl.getInstance();
+      GemFireCacheImpl cache = getGemFireCacheImpl();
       if(cache==null) {
         throw new ForceReattemptException(LocalizedStrings.PartitionMessage_REMOTE_CACHE_IS_CLOSED_0.toLocalizedString());
       }
-      TXManagerImpl txMgr = cache.getTxManager();
+      TXManagerImpl txMgr = getTXManagerImpl(cache);
       TXStateProxy tx = null;
       try {
-        tx = txMgr.masqueradeAs(this);
-        sendReply = operateOnPartitionedRegion(dm, pr, startTime);
+        tx = masqueradeAs(this, txMgr);
+        if (!hasTxAlreadyFinished(tx, txMgr)) {
+          sendReply = operateOnPartitionedRegion(dm, pr, startTime);
+        }
       } finally {
         txMgr.unmasquerade(tx);
       }

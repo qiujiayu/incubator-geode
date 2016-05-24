@@ -187,7 +187,7 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
   /**
    * check to see if the cache is closing
    */
-  final public boolean checkCacheClosing(DistributionManager dm) {
+  public boolean checkCacheClosing(DistributionManager dm) {
     GemFireCacheImpl cache = GemFireCacheImpl.getInstance();
     // return (cache != null && cache.isClosed());
     return cache == null || cache.isClosed();
@@ -197,11 +197,35 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
    * check to see if the distributed system is closing
    * @return true if the distributed system is closing
    */
-  final public boolean checkDSClosing(DistributionManager dm) {
+  public boolean checkDSClosing(DistributionManager dm) {
     InternalDistributedSystem ds = dm.getSystem();
     return (ds == null || ds.isDisconnecting());
   }
   
+  boolean hasTxAlreadyFinished(TXStateProxy tx, TXManagerImpl txMgr) {
+    if (tx == null) {
+      return false;
+    } else {
+      TXId txid = new TXId(getMemberToMasqueradeAs(), getTXUniqId());
+      if (hasTXRecentlyCompleted(txid, txMgr)) {
+        //Should only happen when handling a later arrival of transactional op from proxy,
+        //while the transaction has failed over and already committed or rolled back.
+        //Just send back reply as a success op.
+        //The client connection should be lost from proxy, or
+        //the proxy is closed for failover to occur.
+        logger.info("TxId {} has already finished." , txid);
+        return true;
+      } else {
+        return false;
+      }
+    }
+  }
+
+
+  boolean hasTXRecentlyCompleted(TXId txid, TXManagerImpl txMgr) {
+    return txMgr.isHostedTxRecentlyCompleted(txid);
+  }
+
   /**
    * Upon receipt of the message, both process the message and send an
    * acknowledgement, not necessarily in that order. Note: Any hang in this
@@ -222,8 +246,8 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
         thr = new CacheClosedException(LocalizedStrings.PartitionMessage_REMOTE_CACHE_IS_CLOSED_0.toLocalizedString(dm.getId()));
         return;
       }
-      GemFireCacheImpl gfc = (GemFireCacheImpl)CacheFactory.getInstance(dm.getSystem());
-      r = gfc.getRegionByPathForProcessing(this.regionPath);
+      GemFireCacheImpl gfc = getCache(dm);
+      r = getRegionByPath(gfc);
       if (r == null && failIfRegionMissing()) {
         // if the distributed system is disconnecting, don't send a reply saying
         // the partitioned region can't be found (bug 36585)
@@ -235,11 +259,13 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
       thr = UNHANDLED_EXCEPTION;
       
       // [bruce] r might be null here, so we have to go to the cache instance to get the txmgr
-      TXManagerImpl txMgr = GemFireCacheImpl.getInstance().getTxManager();
+      TXManagerImpl txMgr = getTXManager(gfc);
       TXStateProxy tx = null;
       try {
-        tx = txMgr.masqueradeAs(this);
-        sendReply = operateOnRegion(dm, r, startTime);
+        tx = masqueradeAs(this, txMgr);
+        if (!hasTxAlreadyFinished(tx, txMgr)) {
+          sendReply = operateOnRegion(dm, r, startTime);
+        }
       } finally {
         txMgr.unmasquerade(tx);
       }
@@ -309,6 +335,26 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
         sendReply(getSender(), this.processorId, dm, rex, r, startTime);
       } 
     }
+  }
+
+
+  TXStateProxy masqueradeAs(TransactionMessage msg, TXManagerImpl txMgr) throws InterruptedException {
+    return txMgr.masqueradeAs(msg);
+  }
+
+
+  TXManagerImpl getTXManager(GemFireCacheImpl cache) {
+    return cache.getTxManager();
+  }
+
+
+  LocalRegion getRegionByPath(GemFireCacheImpl gfc) {
+    return gfc.getRegionByPathForProcessing(this.regionPath);
+  }
+
+
+  GemFireCacheImpl getCache(final DistributionManager dm) {
+    return (GemFireCacheImpl)CacheFactory.getInstance(dm.getSystem());
   }
   
   /** Send a generic ReplyMessage.  This is in a method so that subclasses can override the reply message type
