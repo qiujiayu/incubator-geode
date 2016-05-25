@@ -201,30 +201,6 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
     InternalDistributedSystem ds = dm.getSystem();
     return (ds == null || ds.isDisconnecting());
   }
-  
-  boolean hasTxAlreadyFinished(TXStateProxy tx, TXManagerImpl txMgr) {
-    if (tx == null) {
-      return false;
-    } else {
-      TXId txid = new TXId(getMemberToMasqueradeAs(), getTXUniqId());
-      if (hasTXRecentlyCompleted(txid, txMgr)) {
-        //Should only happen when handling a later arrival of transactional op from proxy,
-        //while the transaction has failed over and already committed or rolled back.
-        //Just send back reply as a success op.
-        //The client connection should be lost from proxy, or
-        //the proxy is closed for failover to occur.
-        logger.info("TxId {} has already finished." , txid);
-        return true;
-      } else {
-        return false;
-      }
-    }
-  }
-
-
-  boolean hasTXRecentlyCompleted(TXId txid, TXManagerImpl txMgr) {
-    return txMgr.isHostedTxRecentlyCompleted(txid);
-  }
 
   /**
    * Upon receipt of the message, both process the message and send an
@@ -263,11 +239,11 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
       TXStateProxy tx = null;
       try {
         tx = masqueradeAs(this, txMgr);
-        if (!hasTxAlreadyFinished(tx, txMgr)) {
+        if (!hasTxAlreadyFinished(tx, txMgr, new TXId(getMemberToMasqueradeAs(), getTXUniqId()))) {
           sendReply = operateOnRegion(dm, r, startTime);
         }
       } finally {
-        txMgr.unmasquerade(tx);
+        unmasquerade(txMgr, tx);
       }
       thr = null;
           
@@ -337,21 +313,25 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
     }
   }
 
+  void unmasquerade(TXManagerImpl txMgr, TXStateProxy tx) {
+    txMgr.unmasquerade(tx);
+  }
 
+  boolean hasTxAlreadyFinished(TXStateProxy tx, TXManagerImpl txMgr, TXId txid) {
+    return txMgr.hasTxAlreadyFinished(tx, txid);
+  }
+  
   TXStateProxy masqueradeAs(TransactionMessage msg, TXManagerImpl txMgr) throws InterruptedException {
     return txMgr.masqueradeAs(msg);
   }
-
 
   TXManagerImpl getTXManager(GemFireCacheImpl cache) {
     return cache.getTxManager();
   }
 
-
   LocalRegion getRegionByPath(GemFireCacheImpl gfc) {
     return gfc.getRegionByPathForProcessing(this.regionPath);
   }
-
 
   GemFireCacheImpl getCache(final DistributionManager dm) {
     return (GemFireCacheImpl)CacheFactory.getInstance(dm.getSystem());

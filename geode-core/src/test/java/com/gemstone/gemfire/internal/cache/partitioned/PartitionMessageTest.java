@@ -52,7 +52,7 @@ public class PartitionMessageTest {
   TXStateProxy tx;
   
   @Before
-  public void setUp() {
+  public void setUp() throws PRLocallyDestroyedException, InterruptedException {
     cache = Fakes.cache();
     dm = mock(DistributionManager.class);  
     msg = mock(PartitionMessage.class);
@@ -63,69 +63,29 @@ public class PartitionMessageTest {
     
     when(msg.checkCacheClosing(dm)).thenReturn(false);
     when(msg.checkDSClosing(dm)).thenReturn(false);
-    try {
-      when(msg.getPartitionedRegion()).thenReturn(pr);
-    } catch (PRLocallyDestroyedException e) {
-      e.printStackTrace();
-    }
+    when(msg.getPartitionedRegion()).thenReturn(pr);
     when(msg.getGemFireCacheImpl()).thenReturn(cache);
     when(msg.getStartPartitionMessageProcessingTime(pr)).thenReturn(startTime);
     when(msg.getTXManagerImpl(cache)).thenReturn(txMgr);
- 
-    doAnswer(new CallsRealMethods()).when(msg).process(dm);
+    when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
     
+    doAnswer(new CallsRealMethods()).when(msg).process(dm);    
   }
 
   @Test
-  public void messageWithoutTxPerformsOnRegion() {   
-    try {
-      when(msg.masqueradeAs(msg, txMgr)).thenReturn(null);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    }
-    when(msg.hasTxAlreadyFinished(null, txMgr)).thenCallRealMethod(); 
+  public void messageForNotFinishedTXPerformsOnRegion() throws InterruptedException, CacheException, QueryException, DataLocationException, IOException {   
+    when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenReturn(false);
     msg.process(dm);
     
-    try {
-      verify(msg, times(1)).operateOnPartitionedRegion(dm, pr, startTime);
-    } catch (CacheException | QueryException | DataLocationException | InterruptedException | IOException e) {
-      e.printStackTrace();
-    }
-  }
-
-  @Test
-  public void messageForUnFinishedTXPerformsOnRegion() {   
-    try {
-      when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    }
-    when(msg.hasTxAlreadyFinished(tx, txMgr)).thenCallRealMethod(); 
-    msg.process(dm);
-    
-    try {
-      verify(msg, times(1)).operateOnPartitionedRegion(dm, pr, startTime);
-    } catch (CacheException | QueryException | DataLocationException | InterruptedException | IOException e) {
-      e.printStackTrace();
-    }
+    verify(msg, times(1)).operateOnPartitionedRegion(dm, pr, startTime);
   }
   
   @Test
-  public void messageForFinishedTXDoesNotPerformOnRegion() {   
-    try {
-      when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    }
-    when(msg.hasTXRecentlyCompleted(txid, txMgr)).thenReturn(true);
-    when(msg.hasTxAlreadyFinished(tx, txMgr)).thenCallRealMethod(); 
+  public void messageForFinishedTXDoesNotPerformOnRegion() throws InterruptedException, CacheException, QueryException, DataLocationException, IOException {   
+    when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenReturn(true);
     msg.process(dm);
-    
-    try {
-      verify(msg, times(0)).operateOnPartitionedRegion(dm, pr, startTime);
-    } catch (CacheException | QueryException | DataLocationException | InterruptedException | IOException e) {
-      e.printStackTrace();
-    }
+  
+    verify(msg, times(0)).operateOnPartitionedRegion(dm, pr, startTime);
   }
 
 }

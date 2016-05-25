@@ -45,7 +45,7 @@ public class RemoteOperationMessageTest {
   TXStateProxy tx;
   
   @Before
-  public void setUp() {
+  public void setUp() throws InterruptedException {
     cache = Fakes.cache();
     dm = mock(DistributionManager.class);  
     msg = mock(RemoteOperationMessage.class);
@@ -59,63 +59,25 @@ public class RemoteOperationMessageTest {
     when(msg.getCache(dm)).thenReturn(cache);
     when(msg.getRegionByPath(cache)).thenReturn(r);
     when(msg.getTXManager(cache)).thenReturn(txMgr);
+    when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
 
     doAnswer(new CallsRealMethods()).when(msg).process(dm);    
   }
 
   @Test
-  public void messageWithoutTxPerformsOnRegion() {
-    try {
-      when(msg.masqueradeAs(msg, txMgr)).thenReturn(null);
-    } catch (InterruptedException e1) {
-      e1.printStackTrace();
-    }
-    when(msg.hasTxAlreadyFinished(null, txMgr)).thenCallRealMethod(); 
+  public void messageForNotFinishedTXPerformsOnRegion() throws InterruptedException, RemoteOperationException {
+    when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenCallRealMethod(); 
     msg.process(dm);
 
-    try {
-      verify(msg, times(1)).operateOnRegion(dm, r, startTime);
-    } catch (RemoteOperationException e) {
-      e.printStackTrace();
-    }
- 
-  }
-
-  @Test
-  public void messageForUnFinishedTXPerformsOnRegion() {
-    try {
-      when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
-    } catch (InterruptedException e1) {
-      e1.printStackTrace();
-    }
-
-    when(msg.hasTxAlreadyFinished(tx, txMgr)).thenCallRealMethod(); 
-    msg.process(dm);  
-
-    try {
-      verify(msg, times(1)).operateOnRegion(dm, r, startTime);
-    } catch (RemoteOperationException e) {
-      e.printStackTrace();
-    }
+    verify(msg, times(1)).operateOnRegion(dm, r, startTime);
   }
   
   @Test
-  public void messageForFinishedTXDoesNotPerformOnRegion() {
-    try {
-      when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
-    } catch (InterruptedException e1) {
-      e1.printStackTrace();
-    }
-
-    when(msg.hasTXRecentlyCompleted(txid, txMgr)).thenReturn(true);
-    when(msg.hasTxAlreadyFinished(tx, txMgr)).thenCallRealMethod(); 
+  public void messageForFinishedTXDoesNotPerformOnRegion() throws InterruptedException, RemoteOperationException {
+    when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenReturn(true); 
     msg.process(dm);
 
-    try {
-      verify(msg, times(0)).operateOnRegion(dm, r, startTime);
-    } catch (RemoteOperationException e) {
-      e.printStackTrace();
-    }
+    verify(msg, times(0)).operateOnRegion(dm, r, startTime);
   }
 
 }

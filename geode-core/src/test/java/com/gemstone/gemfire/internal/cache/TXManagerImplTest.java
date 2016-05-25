@@ -25,6 +25,7 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 import com.gemstone.gemfire.cache.Cache;
+import com.gemstone.gemfire.distributed.internal.membership.InternalDistributedMember;
 import com.gemstone.gemfire.internal.cache.partitioned.DestroyMessage;
 import com.gemstone.gemfire.test.fake.Fakes;
 import com.gemstone.gemfire.test.junit.categories.UnitTest;
@@ -38,6 +39,9 @@ public class TXManagerImplTest {
   TXCommitMessage txCommitMsg;
   TXStateProxy globaltx1;
   TXStateProxy globaltx2;
+  TXId completedTxid;
+  TXId notCompletedTxid;
+  InternalDistributedMember member;
 
   @Before
   public void setUp() {
@@ -46,6 +50,9 @@ public class TXManagerImplTest {
     txid = new TXId(null, 0);
     msg = mock(DestroyMessage.class);    
     txCommitMsg = mock(TXCommitMessage.class);
+    member = mock(InternalDistributedMember.class);
+    completedTxid = new TXId(member, 1);
+    notCompletedTxid = new TXId(member, 2);
     
     when(this.msg.canStartRemoteTransaction()).thenReturn(true);
     when(this.msg.canParticipateInTransaction()).thenReturn(true);
@@ -61,7 +68,7 @@ public class TXManagerImplTest {
   }
 
   @Test
-  public void getLockAfterTXStateRemoved(){
+  public void getLockAfterTXStateRemoved() throws InterruptedException{
     TXStateProxy tx = txMgr.getOrSetHostedTXState(txid, msg);
     
     assertEquals(tx, txMgr.getHostedTXState(txid));  
@@ -80,11 +87,7 @@ public class TXManagerImplTest {
     });
     t1.start();
     
-    try {
-      t1.join();
-    } catch (InterruptedException e) {
-      
-    }
+    t1.join();
     
     TXStateProxy curTx = txMgr.getHostedTXState(txid);
     assertNull(curTx);
@@ -98,7 +101,7 @@ public class TXManagerImplTest {
   }
   
   @Test
-  public void getLockAfterTXStateReplaced(){  
+  public void getLockAfterTXStateReplaced() throws InterruptedException{  
     TXStateProxy oldtx = txMgr.getOrSetHostedTXState(txid, msg);
     
     assertEquals(oldtx, txMgr.getHostedTXState(txid));  
@@ -118,12 +121,8 @@ public class TXManagerImplTest {
     });
     t1.start();
     
-    try {
-      t1.join();
-    } catch (InterruptedException e) {
-      
-    }
-    
+    t1.join();
+   
     TXStateProxy curTx = txMgr.getHostedTXState(txid);
     assertNotNull(curTx);
     //replaced
@@ -135,7 +134,7 @@ public class TXManagerImplTest {
   }
   
   @Test
-  public void getLockAfterTXStateCommitted(){  
+  public void getLockAfterTXStateCommitted() throws InterruptedException{  
     TXStateProxy oldtx = txMgr.getOrSetHostedTXState(txid, msg);
     
     assertEquals(oldtx, txMgr.getHostedTXState(txid));  
@@ -154,12 +153,8 @@ public class TXManagerImplTest {
     });
     t1.start();
     
-    try {
-      t1.join();
-    } catch (InterruptedException e) {
-      
-    }
-    
+    t1.join();
+   
     TXStateProxy curTx = txMgr.getHostedTXState(txid);
     assertNull(curTx);
     
@@ -169,18 +164,15 @@ public class TXManagerImplTest {
   } 
   
   @Test
-  public void masqueradeAsCanGetLock(){  
+  public void masqueradeAsCanGetLock() throws InterruptedException{  
     TXStateProxy tx;
-    try {
-      tx = txMgr.masqueradeAs(msg);
-      assertNotNull(tx);
-    } catch (InterruptedException ie) {
-      
-    }
+
+    tx = txMgr.masqueradeAs(msg);
+    assertNotNull(tx);
   }
   
   @Test
-  public void masqueradeAsCanGetLockAfterTXStateIsReplaced(){  
+  public void masqueradeAsCanGetLockAfterTXStateIsReplaced() throws InterruptedException{  
     TXStateProxy tx;
     
     Thread t1 = new Thread(new Runnable() {
@@ -192,10 +184,13 @@ public class TXManagerImplTest {
         tx1 =txMgr.getOrSetHostedTXState(txid, msg);
         assertNotNull(tx1);
         assertTrue(txMgr.getLock(tx1, txid));
+
         try {
           Thread.sleep(20);
         } catch (InterruptedException e) {
+          throw new RuntimeException(e);
         }
+
         txMgr.removeHostedTXState(txid);
         
         tx2 =txMgr.getOrSetHostedTXState(txid, msg);
@@ -208,23 +203,32 @@ public class TXManagerImplTest {
     });
     t1.start();
     
-    try {
-      Thread.sleep(10);
-    } catch (InterruptedException e) {
-      
-    }
-    try {
-      tx = txMgr.masqueradeAs(msg);
-      assertNotNull(tx);
-      tx.getLock().unlock();
-      try {
-        t1.join();
-      } catch (InterruptedException e) {
-        
-      }
-    } catch (InterruptedException ie) {
-      
-    }
+    Thread.sleep(10);
+
+    tx = txMgr.masqueradeAs(msg);
+    assertNotNull(tx);
+    tx.getLock().unlock();
+
+    t1.join();
+
+  }
+  
+  @Test
+  public void hasTxAlreadyFinishedDetectsNoTx() {   
+    assertFalse(txMgr.hasTxAlreadyFinished(null, txid));
+  }
+  
+  @Test
+  public void hasTxAlreadyFinishedDetectsTxNotFinished() {
+    TXStateProxy tx = txMgr.getOrSetHostedTXState(notCompletedTxid, msg);
+    assertFalse(txMgr.hasTxAlreadyFinished(tx, notCompletedTxid));
+  }
+  
+  @Test
+  public void hasTxAlreadyFinishedDetectsTxFinished() throws InterruptedException {
+    TXStateProxy tx = txMgr.getOrSetHostedTXState(completedTxid, msg);    
+    txMgr.saveTXCommitMessageForClientFailover(completedTxid, txCommitMsg); 
+    assertTrue(txMgr.hasTxAlreadyFinished(tx, completedTxid));
   }
   
 }

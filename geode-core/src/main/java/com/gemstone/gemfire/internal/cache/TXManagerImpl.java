@@ -743,7 +743,7 @@ public final class TXManagerImpl implements CacheTransactionManager,
     return val;
   }
 
-  public TXStateProxy getOrSetHostedTXState(TXId key, TransactionMessage msg) {
+  TXStateProxy getOrSetHostedTXState(TXId key, TransactionMessage msg) {
     TXStateProxy val = this.hostedTXStates.get(key);
     if (val == null) {
       synchronized(this.hostedTXStates) {
@@ -787,6 +787,22 @@ public final class TXManagerImpl implements CacheTransactionManager,
       }
     }
     return true;
+  }
+  
+  public boolean hasTxAlreadyFinished(TXStateProxy tx, TXId txid) {
+    if (tx == null) {
+      return false;
+    }
+    if (isHostedTxRecentlyCompleted(txid)) {
+      //Should only happen when handling a later arrival of transactional op from proxy,
+      //while the transaction has failed over and already committed or rolled back.
+      //Just send back reply as a success op.
+      //The client connection should be lost from proxy, or
+      //the proxy is closed for failover to occur.
+      logger.info("TxId {} has already finished." , txid);
+      return true;
+    }
+    return false;
   }
   
   /**
