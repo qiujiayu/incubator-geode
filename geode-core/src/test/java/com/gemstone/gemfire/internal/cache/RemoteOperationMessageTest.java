@@ -50,7 +50,7 @@ public class RemoteOperationMessageTest {
     dm = mock(DistributionManager.class);  
     msg = mock(RemoteOperationMessage.class);
     r = mock(LocalRegion.class);
-    txMgr = new TXManagerImpl(null, cache);
+    txMgr = mock(TXManagerImpl.class);
     txid = new TXId(null, 0);
     tx = mock(TXStateProxyImpl.class);
     
@@ -59,13 +59,22 @@ public class RemoteOperationMessageTest {
     when(msg.getCache(dm)).thenReturn(cache);
     when(msg.getRegionByPath(cache)).thenReturn(r);
     when(msg.getTXManager(cache)).thenReturn(txMgr);
-    when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
+    when(txMgr.hasTxAlreadyFinished(tx, txid)).thenCallRealMethod();
 
     doAnswer(new CallsRealMethods()).when(msg).process(dm);    
+  }
+  
+  @Test
+  public void messageWithNoTXPerformsOnRegion() throws InterruptedException, RemoteOperationException {
+    when(txMgr.masqueradeAs(msg)).thenReturn(null);
+    msg.process(dm);
+
+    verify(msg, times(1)).operateOnRegion(dm, r, startTime);
   }
 
   @Test
   public void messageForNotFinishedTXPerformsOnRegion() throws InterruptedException, RemoteOperationException {
+    when(txMgr.masqueradeAs(msg)).thenReturn(tx);
     when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenCallRealMethod(); 
     msg.process(dm);
 
@@ -74,6 +83,7 @@ public class RemoteOperationMessageTest {
   
   @Test
   public void messageForFinishedTXDoesNotPerformOnRegion() throws InterruptedException, RemoteOperationException {
+    when(txMgr.masqueradeAs(msg)).thenReturn(tx);
     when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenReturn(true); 
     msg.process(dm);
 

@@ -297,10 +297,7 @@ public abstract class PartitionMessage extends DistributionMessage implements
   long getStartPartitionMessageProcessingTime(PartitionedRegion pr) {
     return pr.getPrStats().startPartitionMessageProcessing();
   }
-  
-  TXStateProxy masqueradeAs(TransactionMessage msg, TXManagerImpl txMgr) throws InterruptedException {
-    return txMgr.masqueradeAs(msg);
-  }
+
   
   /**
    * Upon receipt of the message, both process the message and send an
@@ -341,14 +338,18 @@ public abstract class PartitionMessage extends DistributionMessage implements
         throw new ForceReattemptException(LocalizedStrings.PartitionMessage_REMOTE_CACHE_IS_CLOSED_0.toLocalizedString());
       }
       TXManagerImpl txMgr = getTXManagerImpl(cache);
-      TXStateProxy tx = null;
-      try {
-        tx = masqueradeAs(this, txMgr);
-        if (!hasTxAlreadyFinished(tx, txMgr, new TXId(getMemberToMasqueradeAs(), getTXUniqId()))) {
-          sendReply = operateOnPartitionedRegion(dm, pr, startTime);
+      TXStateProxy tx = txMgr.masqueradeAs(this);
+      if (tx == null) {
+        sendReply = operateOnPartitionedRegion(dm, pr, startTime);        
+      } else {
+        try {
+          TXId txid = new TXId(getMemberToMasqueradeAs(), getTXUniqId());
+          if (!hasTxAlreadyFinished(tx, txMgr, txid)) {
+            sendReply = operateOnPartitionedRegion(dm, pr, startTime);        
+          }  
+        } finally {
+          txMgr.unmasquerade(tx);
         }
-      } finally {
-        unmasquerade(txMgr, tx);
       }
       thr = null;
           
@@ -426,11 +427,6 @@ public abstract class PartitionMessage extends DistributionMessage implements
         EntryLogger.clearSource();
       } 
     }
-  }
-
-
-  void unmasquerade(TXManagerImpl txMgr, TXStateProxy tx) {
-    txMgr.unmasquerade(tx);
   }
   
   /** Send a generic ReplyMessage.  This is in a method so that subclasses can override the reply message type

@@ -20,6 +20,9 @@ package com.gemstone.gemfire.internal.cache;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -29,6 +32,7 @@ import com.gemstone.gemfire.distributed.internal.membership.InternalDistributedM
 import com.gemstone.gemfire.internal.cache.partitioned.DestroyMessage;
 import com.gemstone.gemfire.test.fake.Fakes;
 import com.gemstone.gemfire.test.junit.categories.UnitTest;
+import com.jayway.awaitility.Awaitility;
 
 
 @Category(UnitTest.class)
@@ -42,6 +46,9 @@ public class TXManagerImplTest {
   TXId completedTxid;
   TXId notCompletedTxid;
   InternalDistributedMember member;
+  CountDownLatch latch = new CountDownLatch(1);
+  volatile int count = 0;
+  TXStateProxy tx1, tx2;
 
   @Before
   public void setUp() {
@@ -177,20 +184,16 @@ public class TXManagerImplTest {
     
     Thread t1 = new Thread(new Runnable() {
       public void run() {
-        TXStateProxy tx1, tx2;
-
         tx1 = txMgr.getHostedTXState(txid);
         assertNull(tx1);
         tx1 =txMgr.getOrSetHostedTXState(txid, msg);
         assertNotNull(tx1);
         assertTrue(txMgr.getLock(tx1, txid));
 
-        try {
-          Thread.sleep(20);
-        } catch (InterruptedException e) {
-          throw new RuntimeException(e);
-        }
-
+        latch.countDown();
+        
+        Awaitility.await().atMost(30, TimeUnit.SECONDS).until(() -> tx1.getLock().hasQueuedThreads()); 
+        
         txMgr.removeHostedTXState(txid);
         
         tx2 =txMgr.getOrSetHostedTXState(txid, msg);
@@ -202,11 +205,12 @@ public class TXManagerImplTest {
       }
     });
     t1.start();
-    
-    Thread.sleep(10);
-
+            
+    latch.await(15, TimeUnit.SECONDS);
+  
     tx = txMgr.masqueradeAs(msg);
     assertNotNull(tx);
+    assertEquals(tx, tx2);
     tx.getLock().unlock();
 
     t1.join();

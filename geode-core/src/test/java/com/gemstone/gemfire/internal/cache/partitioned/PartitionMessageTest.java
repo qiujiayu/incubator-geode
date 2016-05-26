@@ -57,7 +57,7 @@ public class PartitionMessageTest {
     dm = mock(DistributionManager.class);  
     msg = mock(PartitionMessage.class);
     pr = mock(PartitionedRegion.class);
-    txMgr = new TXManagerImpl(null, cache);
+    txMgr = mock(TXManagerImpl.class);
     tx = mock(TXStateProxyImpl.class);
     txid = new TXId(null, 0);
     
@@ -67,14 +67,22 @@ public class PartitionMessageTest {
     when(msg.getGemFireCacheImpl()).thenReturn(cache);
     when(msg.getStartPartitionMessageProcessingTime(pr)).thenReturn(startTime);
     when(msg.getTXManagerImpl(cache)).thenReturn(txMgr);
-    when(msg.masqueradeAs(msg, txMgr)).thenReturn(tx);
+    when(msg.hasTxAlreadyFinished(null, txMgr, txid)).thenCallRealMethod();
     
     doAnswer(new CallsRealMethods()).when(msg).process(dm);    
   }
 
   @Test
+  public void messageWithNoTXPerformsOnRegion() throws InterruptedException, CacheException, QueryException, DataLocationException, IOException {   
+    when(txMgr.masqueradeAs(msg)).thenReturn(null);
+    msg.process(dm);
+    
+    verify(msg, times(1)).operateOnPartitionedRegion(dm, pr, startTime);
+  }
+  
+  @Test
   public void messageForNotFinishedTXPerformsOnRegion() throws InterruptedException, CacheException, QueryException, DataLocationException, IOException {   
-    when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenReturn(false);
+    when(txMgr.masqueradeAs(msg)).thenReturn(tx);
     msg.process(dm);
     
     verify(msg, times(1)).operateOnPartitionedRegion(dm, pr, startTime);
@@ -82,6 +90,7 @@ public class PartitionMessageTest {
   
   @Test
   public void messageForFinishedTXDoesNotPerformOnRegion() throws InterruptedException, CacheException, QueryException, DataLocationException, IOException {   
+    when(txMgr.masqueradeAs(msg)).thenReturn(tx);
     when(msg.hasTxAlreadyFinished(tx, txMgr, txid)).thenReturn(true);
     msg.process(dm);
   

@@ -236,14 +236,18 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
       
       // [bruce] r might be null here, so we have to go to the cache instance to get the txmgr
       TXManagerImpl txMgr = getTXManager(gfc);
-      TXStateProxy tx = null;
-      try {
-        tx = masqueradeAs(this, txMgr);
-        if (!hasTxAlreadyFinished(tx, txMgr, new TXId(getMemberToMasqueradeAs(), getTXUniqId()))) {
-          sendReply = operateOnRegion(dm, r, startTime);
+      TXStateProxy tx = txMgr.masqueradeAs(this);
+      if (tx == null) {
+        sendReply = operateOnRegion(dm, r, startTime);        
+      } else {
+        try {
+          TXId txid = new TXId(getMemberToMasqueradeAs(), getTXUniqId());
+          if (!hasTxAlreadyFinished(tx, txMgr, txid)) {
+            sendReply = operateOnRegion(dm, r, startTime);       
+          }  
+        } finally {
+          txMgr.unmasquerade(tx);
         }
-      } finally {
-        unmasquerade(txMgr, tx);
       }
       thr = null;
           
@@ -313,16 +317,8 @@ public abstract class RemoteOperationMessage extends DistributionMessage impleme
     }
   }
 
-  void unmasquerade(TXManagerImpl txMgr, TXStateProxy tx) {
-    txMgr.unmasquerade(tx);
-  }
-
   boolean hasTxAlreadyFinished(TXStateProxy tx, TXManagerImpl txMgr, TXId txid) {
     return txMgr.hasTxAlreadyFinished(tx, txid);
-  }
-  
-  TXStateProxy masqueradeAs(TransactionMessage msg, TXManagerImpl txMgr) throws InterruptedException {
-    return txMgr.masqueradeAs(msg);
   }
 
   TXManagerImpl getTXManager(GemFireCacheImpl cache) {

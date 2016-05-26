@@ -84,7 +84,7 @@ import com.gemstone.gemfire.internal.util.concurrent.CustomEntryConcurrentHashMa
  * 
  * @see CacheTransactionManager
  */
-public final class TXManagerImpl implements CacheTransactionManager,
+public class TXManagerImpl implements CacheTransactionManager,
     MembershipListener {
 
   private static final Logger logger = LogService.getLogger();
@@ -735,7 +735,11 @@ public final class TXManagerImpl implements CacheTransactionManager,
       boolean success = getLock(val, key);
       while (!success) {
         val = getOrSetHostedTXState(key, msg);
-        success = getLock(val, key);
+        if (val != null) {
+          success = getLock(val, key);
+        } else {
+          break;
+        }
       }
     }
 
